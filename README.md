@@ -2,6 +2,9 @@
 
 This module interrupt, combine, sync incoming input events from Zephyr input subsystem for ZMK.
 
+> [!IMPORTANT]
+> This module is under development. Do NOT use in production. Breaking changes is unavoidable.
+
 ## What it does
 
 To Be Determined
@@ -32,17 +35,7 @@ manifest:
 Roughly, `overlay` of a 2-sensors trackball should look like below.
 
 ```
-#include <dt-bindings/zmk/input_mixer.h>
 #include <input/processors/mixer.dtsi>
-
-//** To unify a mixture from various input devices,
-//   wait and slap all axises as one event sync per 1ms interval.
-//   might need to bump up to 12-16ms on wireless peripheral.
-// &zip_mixer {
-//   sync-report-ms = <1>;
-//   sync-report-yaw-ms = <15>; 
-//   yaw-div = <62>;
-// };
 
 /{
 
@@ -52,10 +45,7 @@ Roughly, `overlay` of a 2-sensors trackball should look like below.
     device = <&pd0>;
     default {
       layers = <DEFAULT>;
-      input-processors 
-        = <&zip_xy_transform (INPUT_TRANSFORM_X_INVERT)>
-        , <&zip_mixer (INPUT_MIXER_X_ONLY)>
-        ;
+      input-processors = <&zip_mixer 0>; // Sensor A (index 0)
     };
   };
 
@@ -65,11 +55,7 @@ Roughly, `overlay` of a 2-sensors trackball should look like below.
     device = <&pd0a>;
     default {
       layers = <DEFAULT>;
-      input-processors 
-        = <&zip_xy_swap_mapper>
-        , <&zip_xy_transform (INPUT_TRANSFORM_Y_INVERT)>
-        , <&zip_mixer (INPUT_MIXER_Y_ONLY)>
-        ;
+      input-processors = <&zip_mixer 1>; // Sensor B (index 1)
     };
   };
 

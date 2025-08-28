@@ -6,17 +6,3 @@ description: Input Processor for mixing values after input events
 compatible: "zmk,input-processor-mixer"
 
 include: ip_one_param.yaml
-
-properties:
-  sync-report-ms:
-    type: int
-    required: true
-    default: 1
-  sync-report-yaw-ms:
-    type: int
-    required: true
-    default: 15
-  yaw-div:
-    type: int
-    required: true
-    default: 25

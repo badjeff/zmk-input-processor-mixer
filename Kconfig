@@ -1,8 +1,4 @@
-# Sensor data simulator
-#
-# Copyright (c) 2019 Nordic Semiconductor
-#
-# SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
-#
+# Copyright (c) 2025 The ZMK Contributors
+# SPDX-License-Identifier: MIT
 
 rsource "src/pointing/Kconfig"
