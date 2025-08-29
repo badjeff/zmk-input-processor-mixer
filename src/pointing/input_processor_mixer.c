@@ -28,7 +28,7 @@ struct zip_input_processor_mixer_config {
 
 struct zip_input_processor_mixer_data {
     const struct device *dev;
-    float cpi_scale, x_scalar, y_scalar, z_scalar;
+    float cpi_scale, x_scalar, y_scalar, z_scalar, wheel_scalar;
     float mat0[3][3], mat1[3][3];
     int16_t x0, x1, y0, y1;
     bool sync0, sync1;
@@ -253,7 +253,8 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
             // if (z_ccw) { LOG_DBG("z-spin CCW"); }
             // if (z_cw) { LOG_DBG("z-spin CW"); }
             if (z_ccw || z_cw) {
-                input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, -1 * data->z, true, K_NO_WAIT);
+                int16_t z = data->z * data->wheel_scalar;
+                input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, z, true, K_NO_WAIT);
                 data->z = 0;
                 data->x = 0;
                 data->y = 0;
@@ -315,7 +316,10 @@ static int sy_init(const struct device *dev) {
     // Reduce thumb movement that lead to spin
     data->x_scalar = 1.0f * data->cpi_scale * 0.533f;
     data->y_scalar = 1.0f * data->cpi_scale;
-    data->z_scalar = 1.0f * data->cpi_scale * 0.02f;
+
+    // z-axis sensitive, must have same direction to x_scalar
+    data->z_scalar = 1.0f * data->cpi_scale * 0.011f;
+    data->wheel_scalar = 1.0f;
 
     return 0;
 }
