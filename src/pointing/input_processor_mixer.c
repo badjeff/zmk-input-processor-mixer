@@ -23,6 +23,29 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #endif
 #define DEG2RAD(d) ((d) * M_PI / 180.0f)
 
+
+// sync interal
+static const uint32_t sync_report_ms = 4;
+
+// unit of sync interal, to purge xy remainders after idle
+static const uint8_t sync_purge_unit = 5;
+
+
+// enable z-axis for scrolling
+static bool scroll_enabled = true;
+
+// enable z-axis lock for scrolling
+// static bool scroll_lock_enabled = false;
+static bool scroll_lock_enabled = true;
+
+// scroll lock active, while continuous {N} ticks within {N} ms
+static const uint8_t scroll_lock_active_tick_min = 5;
+static const uint32_t scroll_lock_active_tick_within_ms = 450;
+
+// scroll lock deactive, while no tick within {N} ms
+static const uint32_t scroll_lock_deactive_cooldown_ms = 350;
+
+
 struct zip_input_processor_mixer_config {
 };
 
@@ -33,6 +56,7 @@ struct zip_input_processor_mixer_data {
     int16_t x0, x1, y0, y1;
     bool sync0, sync1;
     int64_t last_rpt_time;
+    int64_t last_whl_time;
     float xrmd, yrmd, zrmd;
     int16_t x, y, z;
 };
@@ -141,14 +165,8 @@ static void prepare_mat(float theta_from, float phi_from, float theta_to, float 
     to_y /= to_len;
     to_z /= to_len;
 
-    // Check if vectors are collinear and use quaternion method if they are
-    float axis_x = from_y * to_z - from_z * to_y;
-    float axis_y = from_z * to_x - from_x * to_z;
-    float axis_z = from_x * to_y - from_y * to_x;
-
     float from_vec[3] = {from_x, from_y, from_z};
     float to_vec[3] = {to_x, to_y, to_z};
-
     mat_from_vectors(from_vec, to_vec, matrix);
 }
 
@@ -201,12 +219,11 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
     event->value = 0;
     event->sync = false;
 
-    static uint32_t sync_report_ms = 4;
     int64_t now = k_uptime_get();
-    int64_t ts_diff = now - data->last_rpt_time;
+    int64_t rpt_diff = now - data->last_rpt_time;
 
     // Purge remainders if they are holden too long
-    if (ts_diff > sync_report_ms * 5) {
+    if (rpt_diff > sync_report_ms * sync_purge_unit) {
         data->xrmd = 0;
         data->yrmd = 0;
         data->zrmd = 0;
@@ -215,7 +232,7 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
         data->z = 0;
     }
 
-    if (ts_diff > sync_report_ms) {
+    if (rpt_diff > sync_report_ms) {
         // LOG_DBG("x0: %d, y0: %d, x1: %d, y1: %d", data->x0, data->y0, data->x1, data->y1);
 
         float dx = 0, dy = 0, dz = 0;
@@ -246,16 +263,40 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
         data->zrmd -= data->z;
         // LOG_DBG("x: %d, y: %d, z: %d", data->x, data->y, data->z);
 
-        const bool have_z = data->z != 0;
-        if (have_z) {
-            const bool z_ccw = data->x < 0 && data->z > 0;
-            const bool z_cw  = data->x > 0 && data->z < 0;
-            // if (z_ccw) { LOG_DBG("z-spin CCW"); }
-            // if (z_cw) { LOG_DBG("z-spin CW"); }
-            if (z_ccw || z_cw) {
-                int16_t z = data->z * data->wheel_scalar;
-                input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, z, true, K_NO_WAIT);
-                data->z = 0;
+        if (scroll_enabled) {
+            int64_t whl_diff = now - data->last_whl_time;
+            bool prefer_scroll = false;
+
+            static uint32_t scroll_tick = 0;
+            if (scroll_lock_enabled) {
+                if (whl_diff > scroll_lock_deactive_cooldown_ms) {
+                    scroll_tick = 0;
+                }
+                prefer_scroll = (scroll_tick >= scroll_lock_active_tick_min)
+                                && (whl_diff <= scroll_lock_active_tick_within_ms);
+            }
+
+            const bool have_z = data->z != 0;
+            if (have_z) {
+                const bool z_ccw = data->x < 0 && data->z > 0;
+                const bool z_cw  = data->x > 0 && data->z < 0;
+                if (z_ccw || z_cw) {
+                    int16_t z = data->z * data->wheel_scalar;
+                    if (scroll_lock_enabled) {
+                        if (prefer_scroll) {
+                            input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, z, true, K_NO_WAIT);
+                        }
+                        scroll_tick++;
+                    } else {
+                        input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, z, true, K_NO_WAIT);
+                    }
+                    data->z = 0;
+                    data->x = 0;
+                    data->y = 0;
+                }
+                data->last_whl_time = now;
+            }
+            if (scroll_lock_enabled && prefer_scroll) {
                 data->x = 0;
                 data->y = 0;
             }
@@ -318,7 +359,7 @@ static int sy_init(const struct device *dev) {
     data->y_scalar = 1.0f * data->cpi_scale;
 
     // z-axis sensitive, must have same direction to x_scalar
-    data->z_scalar = 1.0f * data->cpi_scale * 0.011f;
+    data->z_scalar = 1.0f * data->cpi_scale * 0.0125f;
     data->wheel_scalar = 1.0f;
 
     return 0;
