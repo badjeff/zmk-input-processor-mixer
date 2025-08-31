@@ -39,8 +39,8 @@ static bool scroll_enabled = true;
 static bool scroll_lock_enabled = true;
 
 // scroll lock active, while continuous {N} ticks within {N} ms
-static const uint8_t scroll_lock_active_tick_min = 5;
-static const uint32_t scroll_lock_active_tick_within_ms = 450;
+static const uint8_t scroll_lock_active_tick_min = 3;
+static const uint32_t scroll_lock_active_tick_within_ms = 350;
 
 // scroll lock deactive, while no tick within {N} ms
 static const uint32_t scroll_lock_deactive_cooldown_ms = 350;
@@ -352,7 +352,7 @@ static int sy_init(const struct device *dev) {
     prepare_mat(theta_b, phi_b, theta_target, phi_target, data->mat1);
 
     // Set Virtual CPI
-    data->cpi_scale = 500.0f / 3200.0f;
+    data->cpi_scale = 600.0f / 3200.0f;
 
     // Reduce thumb movement that lead to spin
     data->x_scalar = 1.0f * data->cpi_scale * 0.533f;
