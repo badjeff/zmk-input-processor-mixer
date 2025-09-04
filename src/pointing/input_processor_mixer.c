@@ -38,9 +38,12 @@ static bool scroll_enabled = true;
 // static bool scroll_lock_enabled = false;
 static bool scroll_lock_enabled = true;
 
-// scroll lock active, while continuous {N} ticks within {N} ms
+// scroll lock active, while continuous spinning for {N} ticks within {N} ms
+//   NOTE 1: one tick means each time `data->z` has accumulated (>= 1).
+//   NOTE 2: while data->z_scalar closer to zero, it will take longer distance 
+//           to be accumulated to one.
 static const uint8_t scroll_lock_active_tick_min = 3;
-static const uint32_t scroll_lock_active_tick_within_ms = 350;
+static const uint32_t scroll_lock_active_tick_within_ms = 90;
 
 // scroll lock deactive, while no tick within {N} ms
 static const uint32_t scroll_lock_deactive_cooldown_ms = 350;
@@ -56,6 +59,7 @@ struct zip_input_processor_mixer_data {
     int16_t x0, x1, y0, y1;
     bool sync0, sync1;
     int64_t last_rpt_time;
+    int64_t last_spin_sess_st_time;
     int64_t last_whl_time;
     float xrmd, yrmd, zrmd;
     int16_t x, y, z;
@@ -269,11 +273,13 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
 
             static uint32_t scroll_tick = 0;
             if (scroll_lock_enabled) {
-                if (whl_diff > scroll_lock_deactive_cooldown_ms) {
+                if (scroll_tick && whl_diff > scroll_lock_deactive_cooldown_ms) {
                     scroll_tick = 0;
+                    // LOG_DBG("spin session ended");
                 }
+                int64_t spn_diff = now - data->last_spin_sess_st_time;
                 prefer_scroll = (scroll_tick >= scroll_lock_active_tick_min)
-                                && (whl_diff <= scroll_lock_active_tick_within_ms);
+                             && (spn_diff >= scroll_lock_active_tick_within_ms);
             }
 
             const bool have_z = data->z != 0;
@@ -283,8 +289,14 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
                 if (z_ccw || z_cw) {
                     int16_t z = data->z * data->wheel_scalar;
                     if (scroll_lock_enabled) {
+                        LOG_DBG("spin_sess ts %lld %s", now - data->last_spin_sess_st_time, 
+                                prefer_scroll ? "*" : "");
                         if (prefer_scroll) {
                             input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, z, true, K_NO_WAIT);
+                        }
+                        if (scroll_tick == 0) {
+                            data->last_spin_sess_st_time = now;
+                            // LOG_DBG("spin session started");
                         }
                         scroll_tick++;
                     } else {
