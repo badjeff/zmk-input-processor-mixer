@@ -34,19 +34,29 @@ static const uint8_t sync_purge_unit = 5;
 // enable z-axis for scrolling
 static bool scroll_enabled = true;
 
-// enable z-axis lock for scrolling
+// enable xy-axis lock for panning, to only parse xy-axis value and report mouse input values
+// static bool pan_lock_enabled = false;
+static bool pan_lock_enabled = true;
+// pan lock active, while continuous spinning for {N} ticks within {N} ms
+//   NOTE 1: one tick means each time `data->x` or `data->y` has accumulated (>= 1).
+//   NOTE 2: while enabling scroll_lock, this threshold must be larger than scroll_lock's
+//           to ensure scroll_lock could have time to make decision.
+static const uint8_t pan_lock_active_tick_min = 40;
+static const uint32_t pan_lock_active_tick_within_ms = 300;
+// pan lock deactive, while no tick within {N} ms
+static const uint32_t pan_lock_deactive_cooldown_ms = 250;
+
+// enable z-axis lock for scrolling, to only parse z-axis values and report wheel input values
 // static bool scroll_lock_enabled = false;
 static bool scroll_lock_enabled = true;
-
 // scroll lock active, while continuous spinning for {N} ticks within {N} ms
 //   NOTE 1: one tick means each time `data->z` has accumulated (>= 1).
 //   NOTE 2: while data->z_scalar closer to zero, it will take longer distance 
 //           to be accumulated to one.
 static const uint8_t scroll_lock_active_tick_min = 3;
 static const uint32_t scroll_lock_active_tick_within_ms = 90;
-
 // scroll lock deactive, while no tick within {N} ms
-static const uint32_t scroll_lock_deactive_cooldown_ms = 350;
+static const uint32_t scroll_lock_deactive_cooldown_ms = 250;
 
 
 struct zip_input_processor_mixer_config {
@@ -59,6 +69,7 @@ struct zip_input_processor_mixer_data {
     int16_t x0, x1, y0, y1;
     bool sync0, sync1;
     int64_t last_rpt_time;
+    int64_t last_pan_sess_st_time;
     int64_t last_spin_sess_st_time;
     int64_t last_whl_time;
     float xrmd, yrmd, zrmd;
@@ -267,33 +278,67 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
         data->zrmd -= data->z;
         // LOG_DBG("x: %d, y: %d, z: %d", data->x, data->y, data->z);
 
+        bool prefer_pan = false;
+
+        static uint32_t pan_tick = 0;
+        if (pan_lock_enabled) {
+            if (pan_tick && rpt_diff > pan_lock_deactive_cooldown_ms) {
+                pan_tick = 0;
+                // LOG_DBG("pan session ended");
+            }
+            int64_t pan_diff = now - data->last_pan_sess_st_time;
+            prefer_pan = (pan_tick >= pan_lock_active_tick_min)
+                        && (pan_diff >= pan_lock_active_tick_within_ms);
+        }
+
         if (scroll_enabled) {
             int64_t whl_diff = now - data->last_whl_time;
             bool prefer_scroll = false;
 
             static uint32_t scroll_tick = 0;
             if (scroll_lock_enabled) {
-                if (scroll_tick && whl_diff > scroll_lock_deactive_cooldown_ms) {
+
+                if (prefer_pan) {
+                    scroll_tick = 0;
+                }
+                else if (scroll_tick && whl_diff > scroll_lock_deactive_cooldown_ms) {
                     scroll_tick = 0;
                     // LOG_DBG("spin session ended");
                 }
+
                 int64_t spn_diff = now - data->last_spin_sess_st_time;
                 prefer_scroll = (scroll_tick >= scroll_lock_active_tick_min)
                              && (spn_diff >= scroll_lock_active_tick_within_ms);
+
+                if (pan_lock_enabled) {
+                    if (pan_tick && prefer_scroll) {
+                        prefer_pan = false;
+                        pan_tick = 0; // clear pan ticks
+                        // LOG_DBG("interrupt pan session");
+                    }
+                }
+            }
+
+            if (pan_lock_enabled && prefer_pan) {
+                data->z = 0;
             }
 
             const bool have_z = data->z != 0;
             if (have_z) {
-                const bool z_ccw = data->x < 0 && data->z > 0;
-                const bool z_cw  = data->x > 0 && data->z < 0;
+
+                const bool z_ccw = dx < 0 && dz > 0;
+                const bool z_cw  = dx > 0 && dz < 0;
+
                 if (z_ccw || z_cw) {
                     int16_t z = data->z * data->wheel_scalar;
+
                     if (scroll_lock_enabled) {
-                        LOG_DBG("spin_sess ts %lld %s", now - data->last_spin_sess_st_time, 
-                                prefer_scroll ? "*" : "");
-                        if (prefer_scroll) {
-                            input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, z, true, K_NO_WAIT);
-                        }
+
+                        // LOG_DBG("spin_sess ts %lld %s", now - data->last_spin_sess_st_time, 
+                        //         prefer_scroll ? "*" : "");
+
+                        input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, z, true, K_NO_WAIT);
+
                         if (scroll_tick == 0) {
                             data->last_spin_sess_st_time = now;
                             // LOG_DBG("spin session started");
@@ -302,10 +347,12 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
                     } else {
                         input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, z, true, K_NO_WAIT);
                     }
+
                     data->z = 0;
                     data->x = 0;
                     data->y = 0;
                 }
+
                 data->last_whl_time = now;
             }
             if (scroll_lock_enabled && prefer_scroll) {
@@ -317,6 +364,12 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
         const bool have_x = data->x != 0;
         const bool have_y = data->y != 0;
         if (have_x || have_y) {
+
+            // if (pan_lock_enabled) {
+            //     LOG_DBG("pan_sess ts %lld %s %d", now - data->last_pan_sess_st_time, 
+            //             prefer_pan ? "*" : " ", pan_tick);
+            // }
+
             if (have_x) {
                 input_report(dev, INPUT_EV_REL, INPUT_REL_X, data->x, !have_y, K_NO_WAIT);
                 data->x = 0;
@@ -325,6 +378,15 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
                 input_report(dev, INPUT_EV_REL, INPUT_REL_Y, data->y, true, K_NO_WAIT);
                 data->y = 0;
             }
+
+            if (pan_lock_enabled) {
+                if (pan_tick == 0) {
+                    data->last_pan_sess_st_time = now;
+                    // LOG_DBG("pan session started");
+                }
+                pan_tick++;
+            }
+
         }
         data->last_rpt_time = now;
     }
